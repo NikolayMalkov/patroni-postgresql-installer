@@ -1,0 +1,39 @@
+---
+ansible_user: root
+ansible_user_password: root
+
+patroni_cluster_name: "postgres-hacluster4"
+synchronous_mode: true
+synchronous_mode_strict: false
+
+etcd1: "10.0.0.4"
+etcd2: "10.0.0.5"
+
+patroni1: "10.0.0.4"
+patroni2: "10.0.0.5"
+
+ip_addr: "{{ ansible_default_ipv4.address }}"
+
+postgresql_version: 15
+
+repuser_pass: repl
+postgres_pass: postgres
+  
+PGDATA: /pgdata/15/data
+PGBIN: /usr/pgsql-15/bin/
+POSTMASTER: /pgdata/15/data/postmaster.pid
+
+DBNAME: testdb
+
+postgresql_extensions:
+  - { ext: "pg_stat_statements"}
+  - { ext: "pgstattuple"}
+  
+locale: UTF-8
+
+# pg_probackup
+pg_probackup_install: false  # or 'true'
+pg_probackup_install_from_postgrespro_repo: true  # or 'false'
+pg_probackup_version: "{{ postgresql_version }}"
+pg_probackup_instance: "pg_cluster"
+pg_probackup_dir: "/backups"

@@ -1,0 +1,157 @@
+---
+- name: install pg
+  hosts: dbservers
+  become: yes
+
+
+  tasks:
+#    - name: ping
+#      ping:
+#      tags: always
+
+    - name: system info
+      debug:
+        var: system_info
+      vars:
+        system_info:
+          OS: "{{ ansible_distribution | default('N/A') }} {{ ansible_distribution_version | default('N/A') }}"
+          Memory: "{{ (ansible_memtotal_mb / 1024) | round(2) if ansible_memtotal_mb is defined else 'N/A' }} GB"
+          Disk space total: "{{ (ansible_mounts | map(attribute='size_total') | map('int') | sum / 1024 / 1024 / 1024) | round(2) if ansible_mounts is defined else 'N/A' }} GB"
+      tags: always
+    
+    - name: clean cache
+      command: yum clean all
+      when:
+        - ansible_os_family == "RedHat"
+
+    - name: add repo
+      yum_repository:
+         name: postgresql repo
+         description: postgresql repository
+         baseurl: "https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm"
+
+    - name: install packages
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+         - postgresql15-server
+         - postgresql15-libs
+         - postgresql15-contrib
+         - python-psycopg2
+
+    - name: check if postgresql cluster already running
+      stat:
+        path: "{{ POSTMASTER }}"
+      register: postmaster
+      tags:
+      - always
+      
+
+    - name: show message if postmaster is running
+      debug:
+        msg: postgres already running on this node
+      when: postmaster.stat.exists
+
+    - name: show message if postmaster is not running
+      debug:
+         msg: postgres is not running on this node
+      when: not postmaster.stat.exists
+
+#PATRONI BLOCK
+
+    - name: install patroni
+      yum:
+        name: patroni
+        state: present
+
+    - name: check_patroni_node
+      set_fact:
+          patroni_check: "{% if ip_addr==patroni1 %}db-1{% else %}db-2{% endif %}"
+
+    - name: create /etc/patroni
+      file: state=directory dest=/etc/patroni
+      tags: patroni
+
+    - name: put patroni.yml
+      template:
+        src: ./templates/patroni.yml
+        dest: /etc/patroni/patroni.yml
+        backup: yes
+    
+    - name: restart patroni service
+      service: name=patroni state=restarted enabled=yes
+      tags: patroni
+
+##ETCD
+
+    - name: install etcd
+      yum:
+        name: etcd
+        state: present
+
+
+    - name: check etcd
+      set_fact:
+           etcd_check: "{% if ip_addr==etcd1 %}etcd1{% elif ip_addr==etcd2 %}etcd2{% else %}etcd3{% endif %}"
+   
+    - name: put etcd_config
+      template:
+        src: ./templates/etcd.conf
+        dest: /etc/etcd/etcd.conf
+        backup: yes
+   
+    - name: restart etcd service
+      service: name=etcd state=restarted enabled=yes
+      tags: etcd
+
+    - name: waiting for postgresql started
+      ansible.builtin.wait_for:
+         port: 5432
+
+    - name: create database "{{ DBNAME }}"
+      community.postgresql.postgresql_db:
+        name: "{{ DBNAME }}"
+        encoding: UTF-8
+        lc_collate: ru_RU.UTF-8
+        lc_ctype: ru_RU.UTF-8
+        template: template0
+      ignore_errors: true
+
+    - name: Add extensions to the databases
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_ext:
+         db: "{{ DBNAME }}"
+         name: "{{ item.ext }}"
+         state: present
+      loop: "{{ postgresql_extensions | flatten(1) }}"
+      when:
+        - postgresql_extensions is defined
+        - postgresql_extensions | length > 0
+
+#PG_PROBACKUP
+    - name: add pgpro repo
+      yum:
+        name: https://repo.postgrespro.ru/pg_probackup/keys/pg_probackup-repo-centos.noarch.rpm
+     
+    - name: install pg_probackup
+      yum:
+        name: pg_probackup-15
+
+    - name: initialize pg_probackup instance
+      become: true
+      become_user: postgres
+      command: /bin/pg_probackup-15 init -B "{{ pg_probackup_dir }}"
+#      ignore_errors: true
+
+    - name: add pg_probackup instance
+      become: true
+      become_user: postgres
+      command: /bin/pg_probackup-15 add-instance -B "{{ pg_probackup_dir }}" -D "{{ PGDATA }}" --instance "{{ pg_probackup_instance }}"
+#      ignore_errors: true
+
+    - name: create full backup
+      become: true
+      become_user: postgres
+      command: /bin/pg_probackup-15 backup -B "{{ pg_probackup_dir }}" --instance "{{ pg_probackup_instance }}" -b FULL --stream

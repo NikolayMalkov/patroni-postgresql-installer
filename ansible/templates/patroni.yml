@@ -1,0 +1,81 @@
+scope: {{ patroni_cluster_name }}
+name: {{ patroni_check }}
+ 
+restapi:
+  listen: {{ ansible_default_ipv4.address }}:8008
+  connect_address: {{ ansible_default_ipv4.address }}:8008
+ 
+etcd:
+  hosts: {{ etcd1 }}:2379, {{ etcd2 }}:2379
+ 
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    synchronous_mode: {{ synchronous_mode }}
+    synchronous_mode_strict: {{ synchronous_mode_strict }}
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        max_connections: 200
+        huge_pages: try
+        maintenance_work_mem: 256MB
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_size: 2GB
+        shared_buffers: 512MB
+        max_wal_senders: 5
+        max_replication_slots: 5
+        checkpoint_timeout: 30
+        checkpoint_completion_target: 0.9
+        autovacuum_vacuum_scale_factor: 0.01
+        autovacuum_analyze_scale_factor: 0.01
+        wal_compression: on
+        shared_preload_libraries: pg_stat_statements, pgstattuple
+        track_io_timing: on
+        log_destination: csvlog
+        log_lock_waits: on
+        log_checkpoints: on
+        logging_collector: on
+        log_truncate_on_rotation: on
+        log_rotation_age: 1d
+        hot_standby_feedback: on
+        
+        
+ 
+  initdb:
+  - encoding: {{ locale }}
+  - data-checksums
+ 
+  pg_hba:
+  - host replication repl {{patroni1}}/32 md5
+  - host replication repl {{patroni2}}/32 md5
+  - host all all {{patroni1}}/32 md5
+  - host all all {{patroni2}}/32 md5
+  - host all all 0.0.0.0/0 md5
+ 
+  users:
+      repl:
+         password: {{ repuser_pass }}
+         options:
+             - replication
+             - replication
+ 
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: {{ ansible_default_ipv4.address }}:5432
+  data_dir: {{ PGDATA }}
+  config_dir: {{ PGDATA }}
+  bin_dir: {{ PGBIN }}
+  authentication:
+    replication:
+      username: repl
+      password: {{ repuser_pass }}
+    superuser:
+      username: postgres
+      password: {{ postgres_pass }}
+  parameters:
+    unix_socket_directories: '/var/run/postgresql'
